@@ -177,15 +177,19 @@ window.addEventListener('keydown', e=>{
 });
 
 // ---- update ----
+// spreadレベルに応じた弾数: 0=1発, 1〜2=3発, 3〜5=5発。すべて直線(角度なし)
+function spreadBulletCount(level){
+  if (level <= 0) return 1;
+  if (level <= 2) return 3;
+  return 5;
+}
+
 function fireBullet(){
-  bullets.push({ x: player.x, y: player.y - player.h/2, vy: -9, r: 5 });
-  bullets.push({ x: player.x-14, y: player.y - player.h/2+6, vy: -9, r: 4 });
-  bullets.push({ x: player.x+14, y: player.y - player.h/2+6, vy: -9, r: 4 });
-  // 拡散弾はレベルに応じて角度違いのペアが増えていく(永続強化)
-  for (let i=1; i<=levels.spread; i++){
-    const vx = 1.8 * i;
-    bullets.push({ x: player.x, y: player.y - player.h/2, vy: -8.7, vx: -vx, r: 4 });
-    bullets.push({ x: player.x, y: player.y - player.h/2, vy: -8.7, vx:  vx, r: 4 });
+  const count = spreadBulletCount(levels.spread);
+  const offsets = count === 1 ? [0] : count === 3 ? [-14, 0, 14] : [-28, -14, 0, 14, 28];
+  for (const ox of offsets){
+    const center = ox === 0;
+    bullets.push({ x: player.x + ox, y: player.y - player.h/2 + (center ? 0 : 6), vy: -9, r: center ? 5 : 4 });
   }
 }
 
@@ -268,7 +272,8 @@ function update(dt){
   }
 
   fireTimer -= dt;
-  const fireInterval = Math.max(2.5, 9 - levels.rapid*1.1); // レベルが上がるほど連射間隔が縮む
+  // レベルが上がるほど連射間隔が縮む(rapid・spread両方が寄与する)
+  const fireInterval = Math.max(2.5, 9 - levels.rapid*1.1 - levels.spread*0.5);
   if (fireTimer<=0){ fireBullet(); fireTimer = fireInterval; }
 
   bullets.forEach(b=>{ b.y += b.vy; if (b.vx) b.x += b.vx; });
