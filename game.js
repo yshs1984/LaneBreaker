@@ -337,29 +337,40 @@ function update(dt){
     }
   }
 
-  // bullet-item collision(氷を割るたびにhpが減り、0になった瞬間に即座に効果を付与する)
+  // bullet-item collision(氷を割るたびにhpが減り、0で氷が割れる。効果の付与は「割れた後に触れた時」)
   for (let bi=bullets.length-1; bi>=0; bi--){
     const b = bullets[bi];
     for (let ii=items.length-1; ii>=0; ii--){
       const it = items[ii];
+      if (it.broken) continue; // 割れた後は弾を素通しする
       const dx = b.x-it.x, dy=b.y-it.y;
       if (Math.sqrt(dx*dx+dy*dy) < it.r + b.r){
         it.hp -= 1;
         it.hitFlash = 6;
         bullets.splice(bi,1);
         if (it.hp<=0){
-          applyItem(it.type);
-          spawnParticles(it.x, it.y, it.type.color);
-          items.splice(ii,1);
+          it.broken = true;
+          spawnParticles(it.x, it.y, '#fff');
         }
         break;
       }
     }
   }
 
-  // items falling(触れても回収されない。入手するには撃って割る必要がある)
+  // items falling + 割れたアイテムに触れたら回収する
   items.forEach(it=> it.y += it.vy * dt);
-  items = items.filter(it=> it.y <= H()+20);
+  items = items.filter(it=>{
+    if (it.y > H()+20) return false;
+    if (it.broken){
+      const dx = it.x-player.x, dy = it.y-player.y;
+      if (Math.sqrt(dx*dx+dy*dy) < it.r + player.w/2){
+        applyItem(it.type);
+        spawnParticles(it.x, it.y, it.type.color);
+        return false;
+      }
+    }
+    return true;
+  });
 
   particles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.life--; });
   particles = particles.filter(p=>p.life>0);
@@ -497,15 +508,24 @@ function draw(){
     ctx.beginPath();
     ctx.arc(0,0,it.r,0,Math.PI*2);
     ctx.fill();
-    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    if (it.broken){
+      // 割れた後は「触れれば取れる」ことを示す明るいリングで強調
+      ctx.strokeStyle = '#ffd23f';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0,0, it.r+5, 0, Math.PI*2);
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
     ctx.fillStyle = '#0a0e1a';
     ctx.font = 'bold 14px sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(it.type.ic, 0, 1);
-    if (it.maxHp>1){
+    if (!it.broken && it.maxHp>1){
       ctx.fillStyle='rgba(0,0,0,.5)';
       ctx.fillRect(-it.r, -it.r-8, it.r*2, 3);
       ctx.fillStyle='#fff';
