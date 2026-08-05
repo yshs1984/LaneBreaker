@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Lane Breaker</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; user-select:none; }
+  html, body { width:100%; height:100%; overflow:hidden; background:#0a0e1a; touch-action:none; }
+  #gameCanvas { display:block; width:100%; height:100%; background:linear-gradient(#151b2e, #0a0e1a); }
+  #ui { position:fixed; top:0; left:0; width:100%; padding:14px 16px; display:flex; justify-content:space-between;
+        font-family:'Segoe UI', sans-serif; color:#fff; pointer-events:none; z-index:10; }
+  #ui .stat { font-size:18px; font-weight:700; text-shadow:0 2px 4px rgba(0,0,0,.6); }
+  #ui .stat span { color:#ffd23f; }
+  #hpBarWrap { position:fixed; top:52px; left:16px; right:16px; height:10px; background:rgba(255,255,255,.15);
+               border-radius:6px; overflow:hidden; z-index:10; }
+  #hpBar { height:100%; width:100%; background:linear-gradient(90deg,#ff5f6d,#ffc371); transition:width .15s; }
+  #overlay { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+             background:rgba(5,8,16,.88); color:#fff; font-family:'Segoe UI', sans-serif; text-align:center; z-index:20; }
+  #overlay h1 { font-size:32px; margin-bottom:8px; }
+  #overlay p { font-size:15px; color:#aab; margin-bottom:24px; line-height:1.6; }
+  #overlay .big { font-size:44px; color:#ffd23f; font-weight:800; margin-bottom:6px; }
+  #startBtn { padding:14px 40px; font-size:18px; font-weight:700; color:#0a0e1a; background:#ffd23f;
+              border:none; border-radius:30px; box-shadow:0 6px 0 #c9a11c; }
+  #startBtn:active { transform:translateY(4px); box-shadow:0 2px 0 #c9a11c; }
+  #hint { position:fixed; bottom:14px; left:0; right:0; text-align:center; color:rgba(255,255,255,.4);
+          font-family:sans-serif; font-size:12px; z-index:10; }
+  #buffRow { position:fixed; top:72px; left:16px; display:flex; gap:6px; z-index:10; }
+  #buffRow .buff { display:flex; align-items:center; gap:4px; background:rgba(0,0,0,.4); border-radius:14px;
+                   padding:4px 10px 4px 6px; font-family:sans-serif; font-size:11px; color:#fff; }
+  #buffRow .buff .ic { width:16px; height:16px; border-radius:50%; display:flex; align-items:center;
+                        justify-content:center; font-size:10px; font-weight:800; color:#0a0e1a; }
+</style>
+</head>
+<body>
+<canvas id="gameCanvas"></canvas>
+
+<div id="ui">
+  <div class="stat">スコア: <span id="scoreVal">0</span></div>
+  <div class="stat">ウェーブ <span id="waveVal">1</span></div>
+</div>
+<div id="hpBarWrap"><div id="hpBar"></div></div>
+<div id="buffRow"></div>
+<div id="hint">ドラッグでレーンを移動 ・ 自動連射 ・ アイテムを取ろう</div>
+
+<div id="overlay">
+  <h1>🔫 Lane Breaker</h1>
+  <p>敵レーン(赤み)3本・供給レーン(水色み)2本、計5レーン。<br>自機はドラッグで最寄りのレーンにスナップ移動する。<br>敵が下まで到達したとき、自分がいるレーンと同じなら被弾する。<br>ウェーブが進むと「装甲」「エリート(目玉アイコン)」「タイタン」と段階的に強い敵が現れる。エリート以上は光って予告した後、自機のレーンへ狙いを変えてくるので、同じ場所に留まり続けるのは危険。<br>供給レーンのパワーアップ(連射・拡散・攻撃力)は永続レベルアップだが、一定時間ごとに1段階ダウンする。取り続けないと火力が目減りしていく。</p>
+  <button id="startBtn">スタート</button>
+</div>
+
+<script src="game.js"></script>
+</body>
+</html>
