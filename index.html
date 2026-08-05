@@ -30,6 +30,18 @@
                    padding:4px 10px 4px 6px; font-family:sans-serif; font-size:11px; color:#fff; }
   #buffRow .buff .ic { width:16px; height:16px; border-radius:50%; display:flex; align-items:center;
                         justify-content:center; font-size:10px; font-weight:800; color:#0a0e1a; }
+  .go-item { opacity:0; transform:translateY(16px); }
+  #overlay.gameover .go-item { animation: goIn .45s ease forwards; }
+  #overlay.gameover .go-rank    { animation-delay: .05s; }
+  #overlay.gameover .go-rankmsg { animation-delay: .18s; }
+  #overlay.gameover .go-score   { animation-delay: .31s; }
+  #overlay.gameover .go-sub     { animation-delay: .44s; }
+  #overlay.gameover .go-btn     { animation-delay: .57s; }
+  @keyframes goIn { to { opacity:1; transform:translateY(0); } }
+  .go-rank { font-size:64px; font-weight:900; line-height:1; }
+  .go-rankmsg { font-size:15px; color:#aab; margin-bottom:12px; }
+  .go-score { font-size:44px; color:#ffd23f; font-weight:800; }
+  .go-sub { font-size:14px; color:#aab; margin-bottom:24px; }
 </style>
 </head>
 <body>

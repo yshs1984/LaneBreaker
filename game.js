@@ -166,6 +166,16 @@ canvas.addEventListener('mousedown', e=>{ touchX = e.clientX; player.targetLane 
 canvas.addEventListener('mousemove', e=>{ if(touchX!==null){ player.targetLane = nearestLane(e.clientX); } });
 window.addEventListener('mouseup', ()=>{ touchX=null; });
 
+// キーボード操作(矢印キー): タッチ/マウスドラッグとは独立に targetLane を直接更新する
+window.addEventListener('keydown', e=>{
+  if (!player) return;
+  if (e.key === 'ArrowLeft'){
+    player.targetLane = Math.max(0, player.targetLane - 1);
+  } else if (e.key === 'ArrowRight'){
+    player.targetLane = Math.min(LANE_COUNT - 1, player.targetLane + 1);
+  }
+});
+
 // ---- update ----
 function fireBullet(){
   bullets.push({ x: player.x, y: player.y - player.h/2, vy: -9, r: 5 });
@@ -287,21 +297,17 @@ function update(dt){
     }
   });
 
-  // reach bottom -> 自機と同じレーンにいた場合だけダメージ(避けられる分、被害は大きめ)
+  // reach bottom -> レーンに関係なく必ず被弾する(避けても素通りにはならない)
   enemies = enemies.filter(en=>{
     if (en.y > H()-40){
-      if (en.lane === player.lane){
-        if (shieldCharges>0){
-          shieldCharges -= 1;
-          spawnParticles(en.x, H()-60, '#4dff88');
-        } else {
-          playerHP -= en.tier.dmg;
-          spawnParticles(en.x, H()-60, '#ff5f6d');
-        }
-        updateUI();
+      if (shieldCharges>0){
+        shieldCharges -= 1;
+        spawnParticles(en.x, H()-60, '#4dff88');
       } else {
-        spawnParticles(en.x, H()-60, '#777');
+        playerHP -= en.tier.dmg;
+        spawnParticles(en.x, H()-60, '#ff5f6d');
       }
+      updateUI();
       return false;
     }
     return true;
@@ -516,18 +522,35 @@ function loop(t){
   }
 }
 
+// 到達ウェーブに応じたランク。ゲームオーバー画面の演出に使う
+const RANKS = [
+  { min: 12, key:'S', color:'#ffd23f', msg:'レーンの支配者' },
+  { min: 9,  key:'A', color:'#4fd1ff', msg:'熟練パイロット' },
+  { min: 6,  key:'B', color:'#4dff88', msg:'一人前' },
+  { min: 3,  key:'C', color:'#c98bff', msg:'見習い' },
+  { min: 0,  key:'D', color:'#aab',    msg:'訓練中' }
+];
+function getRank(w){
+  return RANKS.find(r => w >= r.min);
+}
+
 function gameOver(){
   running = false;
+  const rank = getRank(wave);
+  overlay.classList.add('gameover');
   overlay.style.display = 'flex';
   overlay.innerHTML = `
-    <div class="big">GAME OVER</div>
-    <p>スコア: ${score} ／ 到達ウェーブ: ${wave}</p>
-    <button id="startBtn">もう一度</button>
+    <div class="go-item go-rank" style="color:${rank.color}">${rank.key}</div>
+    <div class="go-item go-rankmsg">${rank.msg}</div>
+    <div class="go-item go-score">${score}</div>
+    <p class="go-item go-sub">スコア ／ 到達ウェーブ ${wave}</p>
+    <button id="startBtn" class="go-item go-btn">もう一度</button>
   `;
   document.getElementById('startBtn').addEventListener('click', startGame);
 }
 
 function startGame(){
+  overlay.classList.remove('gameover');
   overlay.style.display = 'none';
   initGame();
   running = true;
