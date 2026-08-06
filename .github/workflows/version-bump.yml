@@ -1,0 +1,60 @@
+name: Bump game version
+
+on:
+  pull_request:
+    types: [opened]
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  bump-version:
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'push' && github.event.pusher.name != 'github-actions[bot]')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref || github.ref_name }}
+
+      - name: Resolve PR number and branch name
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            PR_NUMBER="${{ github.event.pull_request.number }}"
+            BRANCH="${{ github.event.pull_request.head.ref }}"
+          else
+            BRANCH="${{ github.ref_name }}"
+            PR_NUMBER=$(gh pr list --repo "${{ github.repository }}" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          fi
+          echo "number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+
+      - name: Update version.js to this PR's number
+        id: bump
+        if: steps.pr.outputs.number != ''
+        run: |
+          PR_NUMBER="${{ steps.pr.outputs.number }}"
+          sed -i -E "s/(window\.GAME_VERSION = 'v[0-9]+\.[0-9]+\.)[^']+(';)/\1${PR_NUMBER}\2/" version.js
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Commit and push version bump
+        if: steps.bump.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add version.js
+          git commit -m "chore: bump GAME_VERSION to v1.0.${{ steps.pr.outputs.number }}"
+          git push origin "HEAD:${{ steps.pr.outputs.branch }}"
