@@ -1,3 +1,8 @@
+// バージョン番号は version.js(自動生成ファイル)で定義される
+const GAME_VERSION = window.GAME_VERSION || 'v0.0.0';
+const DEBUG = new URLSearchParams(location.search).get('debug') === '1';
+let debugInvincible = false;
+
 const canvas = document.getElementById('gameCanvas');
 const ctx = canvas.getContext('2d');
 function resize(){ canvas.width = innerWidth; canvas.height = innerHeight; }
@@ -110,27 +115,31 @@ function spawnInterval(){
   return Math.max(16, 68 - wave*6); // フレーム。ウェーブが進むほど短くなる=出現率アップ
 }
 
-function spawnEnemyRow(){
+// 敵オブジェクトの生成。spawnEnemyRow()と検証用API(window.__t.spawnEnemy)の両方から使う
+function makeEnemy(lane, tier){
   const hpBase = 1 + Math.floor(wave/1.7);
+  const hp = Math.round(hpBase * tier.hpMult);
+  return {
+    lane,
+    x: laneX(lane),
+    y: -60,
+    w: 34 * tier.sizeMult,
+    h: 34 * tier.sizeMult,
+    vy: (0.95 + wave*0.09) * tier.speedMult,
+    hp, maxHp: hp,
+    tier,
+    hitFlash: 0,
+    swayPhase: Math.random()*Math.PI*2,
+    // hunterタイプは着地までの間、狙いを自機のレーンへ切り替えてくる
+    shiftTimer: tier.hunter ? 55 + Math.random()*30 : Infinity,
+    telegraph: 0
+  };
+}
+
+function spawnEnemyRow(){
   for (const lane of ENEMY_LANES){
     if (Math.random() < 0.85){ // まれに1レーン抜けて緩急をつける
-      const tier = pickTier();
-      const hp = Math.round(hpBase * tier.hpMult);
-      enemies.push({
-        lane,
-        x: laneX(lane),
-        y: -60,
-        w: 34 * tier.sizeMult,
-        h: 34 * tier.sizeMult,
-        vy: (0.95 + wave*0.09) * tier.speedMult,
-        hp, maxHp: hp,
-        tier,
-        hitFlash: 0,
-        swayPhase: Math.random()*Math.PI*2,
-        // hunterタイプは着地までの間、狙いを自機のレーンへ切り替えてくる
-        shiftTimer: tier.hunter ? 55 + Math.random()*30 : Infinity,
-        telegraph: 0
-      });
+      enemies.push(makeEnemy(lane, pickTier()));
     }
   }
 }
@@ -140,7 +149,7 @@ function spawnEnemyRow(){
 function spawnPowerupFromLane(){
   const lane = POWERUP_LANES[Math.floor(Math.random()*POWERUP_LANES.length)];
   const type = ITEM_TYPES[Math.floor(Math.random()*ITEM_TYPES.length)];
-  items.push({ x: laneX(lane), y: -20, vy: 2.0, r: 15, type, hp: type.iceHp, maxHp: type.iceHp, hitFlash: 0 });
+  items.push(makeItem(laneX(lane), -20, 2.0, 15, type));
 }
 
 // ---- input ----
@@ -211,11 +220,17 @@ const ITEM_TYPES = [
   {k:'heal', color:'#ff9f4f', ic:'回', iceHp:3}
 ];
 
+// アイテムオブジェクトの生成。spawnPowerupFromLane()/maybeDropItem()と
+// 検証用API(window.__t.spawnItem)の両方から使う
+function makeItem(x, y, vy, r, type){
+  return { x, y, vy, r, type, hp: type.iceHp, maxHp: type.iceHp, hitFlash: 0 };
+}
+
 // 撃破時のボーナスドロップ(低確率)。メインの供給は専用レーンから。
 function maybeDropItem(x,y){
   if (Math.random() < 0.08){
     const type = ITEM_TYPES[Math.floor(Math.random()*ITEM_TYPES.length)];
-    items.push({ x, y, vy: 1.6, r: 14, type, hp: type.iceHp, maxHp: type.iceHp, hitFlash: 0 });
+    items.push(makeItem(x, y, 1.6, 14, type));
   }
 }
 
@@ -306,7 +321,9 @@ function update(dt){
   // reach bottom -> レーンに関係なく必ず被弾する(避けても素通りにはならない)
   enemies = enemies.filter(en=>{
     if (en.y > H()-40){
-      if (shieldCharges>0){
+      if (DEBUG && debugInvincible){
+        spawnParticles(en.x, H()-60, '#4dff88');
+      } else if (shieldCharges>0){
         shieldCharges -= 1;
         spawnParticles(en.x, H()-60, '#4dff88');
       } else {
@@ -556,6 +573,14 @@ function draw(){
     ctx.fillText(t.text, W()/2, t.y);
     ctx.globalAlpha = 1;
   });
+
+  // バージョン表示(右下、控えめに)
+  ctx.globalAlpha = 0.5;
+  ctx.fillStyle = '#fff';
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(GAME_VERSION, W()-8, H()-8);
+  ctx.globalAlpha = 1;
 }
 
 let lastTime = 0;
@@ -606,3 +631,59 @@ function startGame(){
 }
 
 startBtn.addEventListener('click', startGame);
+
+// ---------- デバッグ用の検証API ----------
+// ?debug=1 のときだけ window.__t として生える、tools/verify.mjs から使う常設API。
+// 通常プレイでは存在しない。アドホックにフックを足さず、足りない操作はここへ追加すること。
+if (DEBUG){
+  window.__t = {
+    // 内部状態のスナップショット。Playwright側はこれを見て表明を書く
+    snap: () => ({
+      running, score, wave, playerHP, maxHP, shieldCharges,
+      levels: { ...levels },
+      playerLane: player ? player.lane : null,
+      playerY: player ? player.y : null,
+      counts: {
+        enemies: enemies.length, bullets: bullets.length,
+        items: items.length, itemsBroken: items.filter(it=>it.broken).length
+      }
+    }),
+
+    // headless Chromeでは非アクティブタブのrequestAnimationFrameが極端にスロットリングされる
+    // ため、検証で時間を進めるときはこれを使う
+    tick: (steps = 1, dt = 0.05) => {
+      for (let i = 0; i < steps; i++){ update(dt); draw(); }
+    },
+
+    start: () => { if (!running) startGame(); },
+    setInvincible: (v) => { debugInvincible = !!v; },
+    setWave: (n) => { wave = n; },
+    setPlayerLane: (n) => { if (player){ player.lane = n; player.targetLane = n; player.x = laneX(n); } },
+    setLevel: (key, n) => { if (key in levels) levels[key] = n; },
+    setShield: (n) => { shieldCharges = n; },
+    // 大きな値にして自動連射のタイマーを実質止め、forceFire()だけで1発ずつ制御できるようにする
+    setFireTimer: (n) => { fireTimer = n; },
+    // 同様にアイテム自動供給のタイマーも止められるようにする(氷アイテムの検証で
+    // 新規アイテムの自然発生に横から邪魔されないようにするため)
+    setItemSpawnTimer: (n) => { itemSpawnTimer = n; },
+    killPlayer: () => { playerHP = 0; },
+    clearEnemies: () => { enemies.length = 0; },
+    clearItems: () => { items.length = 0; },
+    clearBullets: () => { bullets.length = 0; },
+    // fireTimerの状態に依存せず、実際のfireBullet()を即座に1回呼ぶ
+    forceFire: () => { fireBullet(); },
+
+    // yを指定できるのは検証の都合(発射位置付近に即座に置いて1ヒットずつ検証するため)。
+    // 省略時は実際のスポーンと同じ挙動(画面上端から)になる
+    spawnEnemy: (tierKey = 'normal', lane = ENEMY_LANES[0], y = -60) => {
+      const tier = ENEMY_TIERS.find(t => t.key === tierKey) || ENEMY_TIERS[0];
+      const en = makeEnemy(lane, tier);
+      en.y = y;
+      enemies.push(en);
+    },
+    spawnItem: (typeKey = 'rapid', lane = POWERUP_LANES[0], y = -20) => {
+      const type = ITEM_TYPES.find(t => t.k === typeKey) || ITEM_TYPES[0];
+      items.push(makeItem(laneX(lane), y, 2.0, 15, type));
+    }
+  };
+}
