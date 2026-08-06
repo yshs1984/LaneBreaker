@@ -174,6 +174,46 @@ const scenarios = {
     });
   },
 
+  // ボス/コンボイ(issue #12)。強制出現中は通常のwave進行・雑魚スポーンが止まり、
+  // 全滅させると再開すること
+  boss: async (check) => {
+    await withGame({ name: 'boss', check }, async (game) => {
+      // --- 単体ボス ---
+      await game.call('spawnBossNow', 'single');
+      let s = await game.snap();
+      check.equal(s.eventActive, true, '単体ボス: イベント中になる');
+      check.equal(s.counts.enemies, 1, '単体ボス: 敵は1体(ボスのみ)');
+      check(s.boss !== null, '単体ボス: snap()にボス情報が出る');
+
+      const waveBefore = s.wave;
+      await game.tick(200, 1); // 通常なら何度もwaveが進む長さ
+      s = await game.snap();
+      check.equal(s.wave, waveBefore, 'ボス戦中はwaveが進まない');
+      check.equal(s.counts.enemies, 1, 'ボス戦中は雑魚が湧かない(ボスのみのまま)');
+
+      await game.call('killBoss');
+      await game.tick(1, 1);
+      s = await game.snap();
+      check.equal(s.eventActive, false, 'ボス撃破後にイベントが終わる');
+      check.equal(s.counts.enemies, 0, 'ボス撃破後に敵がいなくなる');
+      check(s.counts.items >= 1, 'ボス撃破は確定ドロップがある');
+      await game.shot('single-defeated');
+
+      // --- コンボイ ---
+      await game.call('clearItems');
+      await game.call('spawnBossNow', 'convoy');
+      s = await game.snap();
+      check.equal(s.eventActive, true, 'コンボイ: イベント中になる');
+      check.equal(s.counts.enemies, 3, 'コンボイ: 敵専用レーンの数だけ出現する');
+      await game.shot('convoy-spawned');
+
+      await game.call('clearEnemies'); // 配列操作だけで全滅させても、残存チェックで正しく終了すること
+      await game.tick(1, 1);
+      s = await game.snap();
+      check.equal(s.eventActive, false, 'コンボイ全滅後にイベントが終わる');
+    });
+  },
+
   // ゲームオーバーのランク表示(issue #5)。到達ウェーブに応じたランクが
   // 正しく表示されること
   gameover: async (check) => {
