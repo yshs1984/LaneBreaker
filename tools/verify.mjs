@@ -214,6 +214,80 @@ const scenarios = {
     });
   },
 
+  // 緊急回避ボム(issue #13)。チャージがなければ発動しない、発動すると雑魚/コンボイは
+  // 即死・ボスは大ダメージ(即死しない)・弾は残る、使用後は一定時間アイテムが取得できないこと
+  bomb: async (check) => {
+    await withGame({ name: 'bomb', check }, async (game) => {
+      // 他タイマーの自然発火に横から邪魔されないよう止めておく
+      await game.call('setFireTimer', 999999);
+      await game.call('setItemSpawnTimer', 999999);
+
+      // --- チャージ0: 発動しない ---
+      await game.call('setBombCharges', 0);
+      await game.call('spawnEnemy', 'normal', 0);
+      await game.call('spawnEnemy', 'normal', 2);
+      await game.call('useBomb');
+      let s = await game.snap();
+      check.equal(s.counts.enemies, 2, 'チャージ0: 発動せず敵はそのまま');
+      check.equal(s.bombCharges, 0, 'チャージ0: 消費されない');
+
+      // --- 雑魚・コンボイの即死、弾は残る、コンボイ全滅でイベントも終わる ---
+      await game.call('clearEnemies');
+      await game.call('setBombCharges', 1);
+      await game.call('spawnBossNow', 'convoy'); // 敵専用レーン3体
+      await game.call('spawnEnemy', 'normal', 0); // 通常の雑魚も混ぜる
+      await game.call('forceFire');
+      const beforeWipe = await game.snap();
+      await game.call('useBomb');
+      await game.tick(1, 1);
+      s = await game.snap();
+      check.equal(s.counts.enemies, 0, 'ボム: 雑魚・コンボイが全滅する');
+      check.equal(s.eventActive, false, 'ボム: コンボイ全滅でイベントも終わる');
+      check(s.score > beforeWipe.score, 'ボム: 撃破スコアが加算される');
+      check.equal(s.bombCharges, 0, 'ボム: チャージが消費される');
+      check.equal(s.counts.bullets, beforeWipe.counts.bullets, 'ボム: 弾は消えずに残る');
+
+      // --- ボスは即死せず大ダメージ ---
+      await game.call('clearEnemies');
+      await game.call('spawnBossNow', 'single');
+      await game.call('setBombCharges', 1);
+      const bossBefore = (await game.snap()).boss;
+      await game.call('useBomb');
+      await game.tick(1, 1);
+      s = await game.snap();
+      check(s.boss !== null, 'ボム: ボスは即死せず残る');
+      check(s.boss.hp < bossBefore.hp, 'ボム: ボスはダメージを受ける');
+      check(s.boss.hp > s.boss.maxHp * 0.5, 'ボム: ボスは一撃では倒れない');
+
+      // --- デメリット: 使用後は一定時間アイテムが取得できない ---
+      await game.call('clearEnemies');
+      await game.call('clearItems');
+      await game.call('setBombCharges', 1);
+      await game.call('setPlayerLane', 1);
+      await game.call('useBomb'); // itemLockTimerがセットされる
+      await game.call('spawnItem', 'rapid', 1, 700); // プレイヤーのすぐ近くに出す
+      await game.call('forceFire');
+      await game.tick(10, 1); // 弾が届いて割れるところまで
+      s = await game.snap();
+      check.equal(s.itemLocked, true, 'ボム直後: アイテムロック中である');
+      check(s.counts.items >= 1, 'ロック中: 割れても回収されずアイテムが残る');
+      check.equal(s.levels.rapid, 0, 'ロック中: レベルは上がらない');
+
+      await game.tick(500, 1); // ロック(約480)が切れるまで進める
+      s = await game.snap();
+      check.equal(s.itemLocked, false, 'ロックが解除される');
+
+      await game.call('clearItems');
+      await game.call('spawnItem', 'rapid', 1, 700);
+      await game.call('forceFire');
+      await game.tick(20, 1);
+      s = await game.snap();
+      check.equal(s.counts.items, 0, 'ロック解除後: 割れたアイテムが回収される');
+      check.equal(s.levels.rapid, 1, 'ロック解除後: レベルが上がる');
+      await game.shot('after-unlock');
+    });
+  },
+
   // ゲームオーバーのランク表示(issue #5)。到達ウェーブに応じたランクが
   // 正しく表示されること
   gameover: async (check) => {
