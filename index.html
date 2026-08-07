@@ -42,6 +42,12 @@
   .go-rankmsg { font-size:15px; color:#aab; margin-bottom:12px; }
   .go-score { font-size:44px; color:#ffd23f; font-weight:800; }
   .go-sub { font-size:14px; color:#aab; margin-bottom:24px; }
+  #bombBtn { position:fixed; right:16px; bottom:16px; width:56px; height:56px; border-radius:50%;
+             border:none; background:#3a2f0a; box-shadow:0 4px 0 #1a1505; color:#fff;
+             font-size:22px; display:flex; align-items:center; justify-content:center;
+             flex-direction:column; z-index:10; transition:opacity .15s; }
+  #bombBtn:active { transform:translateY(2px); box-shadow:0 2px 0 #1a1505; }
+  #bombBtn span { font-size:11px; font-family:sans-serif; font-weight:700; color:#ffe14d; }
 </style>
 </head>
 <body>
@@ -54,6 +60,7 @@
 <div id="hpBarWrap"><div id="hpBar"></div></div>
 <div id="buffRow"></div>
 <div id="hint">ドラッグでレーンを移動 ・ 自動連射 ・ アイテムを取ろう</div>
+<button id="bombBtn">💣<span id="bombCount">0</span></button>
 
 <div id="overlay">
   <h1>🔫 Lane Breaker</h1>

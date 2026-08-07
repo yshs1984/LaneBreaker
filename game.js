@@ -14,6 +14,8 @@ const startBtn = document.getElementById('startBtn');
 const scoreVal = document.getElementById('scoreVal');
 const waveVal = document.getElementById('waveVal');
 const hpBar = document.getElementById('hpBar');
+const bombBtn = document.getElementById('bombBtn');
+const bombCount = document.getElementById('bombCount');
 
 let W = ()=>canvas.width, H = ()=>canvas.height;
 
@@ -42,6 +44,13 @@ const LEVEL_DECAY_INTERVAL = 2400; // 約40秒ごとに全レベルが1段階ダ
 let levels = { rapid:0, spread:0, power:0 };
 let shieldCharges = 0;
 let levelDecayTimer = 0;
+
+// 緊急回避ボム: shieldと同じ「回数ストック」方式。使うと画面上の敵を一掃する代わりに、
+// 一定時間アイテムが取得できなくなる(見えても取れない)デメリットを負う
+const BOMB_CAP = 2;
+const BOMB_ITEM_LOCK = 480; // 約8秒
+let bombCharges = 0;
+let itemLockTimer = 0;
 
 // 敵のティア定義。ウェーブが進むほど強いティアが解禁され、出現比率も上がっていく。
 // hunter: trueの敵は一定間隔で自機のいるレーンへ狙いを変えてくる(その場に留まり続ける戦法を崩す)
@@ -89,6 +98,8 @@ function initGame(){
   levelDecayTimer = LEVEL_DECAY_INTERVAL;
   eventActive = false;
   eventWave = null;
+  bombCharges = 0;
+  itemLockTimer = 0;
   updateUI();
 }
 
@@ -97,6 +108,8 @@ function updateUI(){
   waveVal.textContent = wave;
   hpBar.style.width = Math.max(0,(playerHP/maxHP*100)) + '%';
   renderBuffRow();
+  bombCount.textContent = bombCharges;
+  bombBtn.style.opacity = bombCharges>0 ? 1 : 0.4;
 }
 
 function renderBuffRow(){
@@ -237,8 +250,13 @@ window.addEventListener('keydown', e=>{
     player.targetLane = Math.max(0, player.targetLane - 1);
   } else if (e.key === 'ArrowRight'){
     player.targetLane = Math.min(LANE_COUNT - 1, player.targetLane + 1);
+  } else if (e.code === 'Space'){
+    e.preventDefault(); // ページスクロールを防ぐ
+    useBomb();
   }
 });
+
+bombBtn.addEventListener('click', useBomb);
 
 // ---- update ----
 // spreadレベルに応じた弾数: 0=1発, 1〜2=3発, 3〜5=5発。すべて直線(角度なし)
@@ -272,7 +290,8 @@ const ITEM_TYPES = [
   {k:'spread', color:'#c98bff', ic:'散', iceHp:1},
   {k:'power', color:'#ff5f6d', ic:'撃', iceHp:2},
   {k:'shield', color:'#4dff88', ic:'盾', iceHp:3},
-  {k:'heal', color:'#ff9f4f', ic:'回', iceHp:3}
+  {k:'heal', color:'#ff9f4f', ic:'回', iceHp:3},
+  {k:'bomb', color:'#ffe14d', ic:'爆', iceHp:3}
 ];
 
 // アイテムオブジェクトの生成。spawnPowerupFromLane()/maybeDropItem()と
@@ -295,6 +314,7 @@ function applyItem(type){
   else if (type.k === 'power') levels.power = Math.min(LEVEL_CAP.power, levels.power+1);
   else if (type.k === 'shield') shieldCharges = Math.min(SHIELD_CAP, shieldCharges+1);
   else if (type.k === 'heal') playerHP = Math.min(maxHP, playerHP + 30);
+  else if (type.k === 'bomb') bombCharges = Math.min(BOMB_CAP, bombCharges+1);
   updateUI();
 }
 
@@ -313,6 +333,21 @@ function damagePlayer(dmg, x, y){
     playerHP -= dmg;
     spawnParticles(x, y, '#ff5f6d');
   }
+  updateUI();
+}
+
+// 緊急回避ボム: 画面上の敵を一掃する(弾は残す)。hpをいじるだけで、実際の削除・
+// スコア加算・ドロップ・(コンボイ全滅時の)eventActive解除は update() の撃破処理フィルタに任せる
+function useBomb(){
+  if (!running || bombCharges <= 0) return;
+  bombCharges -= 1;
+  itemLockTimer = BOMB_ITEM_LOCK; // デメリット: しばらくアイテムが取得できなくなる
+  enemies.forEach(en=>{
+    en.hp = en.isBoss ? en.hp - en.maxHp*0.4 : -1; // ボスは大ダメージ、それ以外は即死
+    en.hitFlash = 12;
+  });
+  spawnParticles(player.x, player.y-60, '#ffe14d');
+  addToast('ボム発動！', '#ffe14d');
   updateUI();
 }
 
@@ -346,6 +381,9 @@ function update(dt){
     }
     if (decayed){ addToast('強化が弱まった…アイテムを取ろう', '#ff9d9d'); updateUI(); }
   }
+
+  // ボム使用のデメリット: 一定時間アイテムが取得できなくなる(items falling側のtouch判定でガードする)
+  if (itemLockTimer > 0) itemLockTimer -= dt;
 
   // 敵の継続スポーン(ボス/コンボイ中は止める)
   if (!eventActive){
@@ -481,11 +519,11 @@ function update(dt){
     }
   }
 
-  // items falling + 割れたアイテムに触れたら回収する
+  // items falling + 割れたアイテムに触れたら回収する(ボム使用直後は見えても取れない)
   items.forEach(it=> it.y += it.vy * dt);
   items = items.filter(it=>{
     if (it.y > H()+20) return false;
-    if (it.broken){
+    if (it.broken && itemLockTimer <= 0){
       const dx = it.x-player.x, dy = it.y-player.y;
       if (Math.sqrt(dx*dx+dy*dy) < it.r + player.w/2){
         applyItem(it.type);
@@ -753,7 +791,9 @@ if (DEBUG){
       boss: (() => {
         const b = enemies.find(en => en.isBoss);
         return b ? { hp: b.hp, maxHp: b.maxHp, lane: b.lane } : null;
-      })()
+      })(),
+      bombCharges,
+      itemLocked: itemLockTimer > 0
     }),
 
     // headless Chromeでは非アクティブタブのrequestAnimationFrameが極端にスロットリングされる
@@ -796,6 +836,10 @@ if (DEBUG){
     // form省略時は通常と同じ交互ロジック('single'/'convoy'で強制指定もできる)
     spawnBossNow: (form) => { startBossEvent(form); },
     // 次の撃破処理(死亡フィルタ)が拾えるようhpを負にするだけ。即座には消えない
-    killBoss: () => { const b = enemies.find(en => en.isBoss); if (b) b.hp = -1; }
+    killBoss: () => { const b = enemies.find(en => en.isBoss); if (b) b.hp = -1; },
+
+    setBombCharges: (n) => { bombCharges = n; },
+    // 発動条件・デメリットを含めて本物の経路を検証するため、実際のuseBomb()をそのまま呼ぶ
+    useBomb: () => { useBomb(); }
   };
 }
