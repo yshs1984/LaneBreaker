@@ -31,6 +31,8 @@ let score, wave, playerHP, maxHP;
 let fireTimer, spawnCooldown, waveTimer, running=false;
 let touchX = null;
 let itemSpawnTimer = 0;
+let eventActive = false; // ボス/コンボイ中は通常のwave進行・雑魚スポーンを止める
+let eventWave = null;    // 直近にイベントを起こしたwave(同じwaveで再トリガーしない)
 
 // パワーアップは時間制限なしの永続レベルアップ方式。ただし放置していると一定時間ごとに1段階下がる
 // (=取り続けないと火力が目減りする)。shieldだけは「被弾を肩代わりする回数」のストック。
@@ -85,6 +87,8 @@ function initGame(){
   levels = { rapid:0, spread:0, power:0 };
   shieldCharges = 0;
   levelDecayTimer = LEVEL_DECAY_INTERVAL;
+  eventActive = false;
+  eventWave = null;
   updateUI();
 }
 
@@ -141,6 +145,57 @@ function spawnEnemyRow(){
     if (Math.random() < 0.85){ // まれに1レーン抜けて緩急をつける
       enemies.push(makeEnemy(lane, pickTier()));
     }
+  }
+}
+
+// ---- ボス/コンボイ ----
+// BOSS_WAVE_INTERVALごとに、単体ボスとコンボイを交互に出現させる。登場中は
+// 通常のwave進行・雑魚スポーンを止め(eventActive)、全滅させると再開する。
+const BOSS_WAVE_INTERVAL = 5;
+
+// 単体ボスは enemies 配列に乗る特殊な敵として実装する(isBoss:true)。
+// 当たり判定・被弾フラッシュ・ミニHPバー・八角形の見た目はmakeEnemy由来の敵と共通。
+function makeBoss(){
+  const hp = 220 + wave*15; // たたき台。実プレイで要調整
+  return {
+    lane: 2, x: laneX(2), y: -100,
+    w: 130, h: 100,
+    vy: 0.4,
+    hp, maxHp: hp,
+    tier: { key:'boss', color:'#ff2d55', dmg: 30, scoreMult: 35, hunter:true },
+    hitFlash: 0, swayPhase: 0,
+    // 既存hunterロジック(telegraph/shiftTimer)で狙いレーンを変える。
+    // slamTimerはボス専用: 今いるレーンに定期的に一撃を入れる
+    shiftTimer: 90, telegraph: 0,
+    slamTimer: 150,
+    isBoss: true,
+    engageY: H()*0.32 // この高さまで来たら止まって居座る
+  };
+}
+
+// コンボイは新しい振る舞いを持たない。既存の敵をそのまま複数体まとめて硬めに出すだけ
+function spawnConvoy(){
+  const pool = ENEMY_TIERS.filter(t => wave >= t.unlockWave && t.key !== 'normal');
+  const tier = pool.length ? pool[pool.length-1] : ENEMY_TIERS[0];
+  for (const lane of ENEMY_LANES){
+    const en = makeEnemy(lane, tier);
+    en.isConvoyMember = true;
+    en.hp = en.maxHp = Math.round(en.hp * 1.4); // 通常より硬めにする
+    enemies.push(en);
+  }
+}
+
+function startBossEvent(forcedForm){
+  eventActive = true;
+  eventWave = wave;
+  enemies.length = 0; // 道中の雑魚を片付けてから登場させる
+  const form = forcedForm || ((Math.floor(wave / BOSS_WAVE_INTERVAL) % 2 === 0) ? 'single' : 'convoy');
+  if (form === 'single'){
+    enemies.push(makeBoss());
+    addToast('ボス接近！', '#ff2d55');
+  } else {
+    spawnConvoy();
+    addToast('コンボイ接近！', '#ff9d9d');
   }
 }
 
@@ -247,18 +302,38 @@ function addToast(text, color){
   toasts.push({ text, color, life: 90, y: 90 });
 }
 
+// 無敵/シールド/ダメージの分岐をまとめる。reach-bottomの被弾とボスのslam攻撃の両方から呼ぶ
+function damagePlayer(dmg, x, y){
+  if (DEBUG && debugInvincible){
+    spawnParticles(x, y, '#4dff88');
+  } else if (shieldCharges>0){
+    shieldCharges -= 1;
+    spawnParticles(x, y, '#4dff88');
+  } else {
+    playerHP -= dmg;
+    spawnParticles(x, y, '#ff5f6d');
+  }
+  updateUI();
+}
+
 function update(dt){
   // レーン移動: targetLaneへ滑らかに補間しつつ、現在レーンは即座に更新(当たり判定は即応させる)
   player.lane = player.targetLane;
   const tx = laneX(player.targetLane);
   player.x += (tx - player.x) * Math.min(1, 0.28*dt);
 
-  // 難易度(ウェーブ)は時間経過で自動的に上昇。全滅待ちにしないことで常に圧力をかける
-  waveTimer -= dt;
-  if (waveTimer <= 0){
-    wave++;
-    waveTimer = 480;
-    updateUI();
+  // 難易度(ウェーブ)は時間経過で自動的に上昇。全滅待ちにしないことで常に圧力をかける。
+  // ボス/コンボイ中は進行を止める
+  if (!eventActive){
+    waveTimer -= dt;
+    if (waveTimer <= 0){
+      wave++;
+      waveTimer = 480;
+      updateUI();
+    }
+    if (wave % BOSS_WAVE_INTERVAL === 0 && wave !== eventWave){
+      startBossEvent();
+    }
   }
 
   // アイテムレベルは放置していると一定時間ごとに1段階ダウンする(その場に居座るだけでは強さを維持できない)
@@ -272,11 +347,13 @@ function update(dt){
     if (decayed){ addToast('強化が弱まった…アイテムを取ろう', '#ff9d9d'); updateUI(); }
   }
 
-  // 敵の継続スポーン
-  spawnCooldown -= dt;
-  if (spawnCooldown <= 0){
-    spawnEnemyRow();
-    spawnCooldown = spawnInterval();
+  // 敵の継続スポーン(ボス/コンボイ中は止める)
+  if (!eventActive){
+    spawnCooldown -= dt;
+    if (spawnCooldown <= 0){
+      spawnEnemyRow();
+      spawnCooldown = spawnInterval();
+    }
   }
 
   // パワーアップレーンへの自動供給(取り逃すとそのまま画面外へ)
@@ -300,7 +377,10 @@ function update(dt){
     en.swayPhase += 0.05;
     const sway = Math.sin(en.swayPhase) * 8; // 揺れ幅を小さく抑えてレーンを保つ
     en.x = laneX(en.lane) + sway;
-    en.y += en.vy * dt;
+    // ボスはengageYまで来たら止まって居座る。それ以外は通常通り進み続ける
+    if (!en.isBoss || en.y < en.engageY){
+      en.y += en.vy * dt;
+    }
 
     if (en.tier.hunter){
       if (en.telegraph > 0){
@@ -316,27 +396,31 @@ function update(dt){
         }
       }
     }
+
+    // ボス専用: 居座っているレーンへ定期的に一撃を入れる
+    if (en.isBoss){
+      en.slamTimer -= dt;
+      if (en.slamTimer <= 0){
+        en.slamTimer = 150 + Math.random()*40;
+        if (en.lane === player.lane){
+          damagePlayer(en.tier.dmg, player.x, player.y);
+        }
+        en.hitFlash = Math.max(en.hitFlash, 10); // 攻撃の合図に軽くフラッシュ
+      }
+    }
   });
 
-  // reach bottom -> レーンに関係なく必ず被弾する(避けても素通りにはならない)
+  // reach bottom -> レーンに関係なく必ず被弾する(避けても素通りにはならない)。ボスは下端到達で消えない
   enemies = enemies.filter(en=>{
+    if (en.isBoss) return true;
     if (en.y > H()-40){
-      if (DEBUG && debugInvincible){
-        spawnParticles(en.x, H()-60, '#4dff88');
-      } else if (shieldCharges>0){
-        shieldCharges -= 1;
-        spawnParticles(en.x, H()-60, '#4dff88');
-      } else {
-        playerHP -= en.tier.dmg;
-        spawnParticles(en.x, H()-60, '#ff5f6d');
-      }
-      updateUI();
+      damagePlayer(en.tier.dmg, en.x, H()-60);
       return false;
     }
     return true;
   });
 
-  // bullet-enemy collision(攻撃力レベルに応じてダメージが永続的に上がる)
+  // bullet-enemy collision: ダメージを与えるだけ。撃破処理は下のfilterでまとめて行う
   const dmg = 1 + levels.power;
   for (let bi=bullets.length-1; bi>=0; bi--){
     const b = bullets[bi];
@@ -347,16 +431,34 @@ function update(dt){
         en.hp -= dmg;
         en.hitFlash = 6;
         bullets.splice(bi,1);
-        if (en.hp<=0){
-          score += 10 * en.tier.scoreMult;
-          spawnParticles(en.x, en.y, en.tier.color);
-          maybeDropItem(en.x, en.y);
-          enemies.splice(ei,1);
-          updateUI();
-        }
         break;
       }
     }
+  }
+
+  // 撃破処理: hpが0以下になった敵をまとめて片付ける(ダメージの発生源によらず一律に処理する。
+  // デバッグでの直接hp操作や、将来弾以外の要因で倒れるケースにも対応できるようにしている)
+  enemies = enemies.filter(en=>{
+    if (en.hp <= 0){
+      score += 10 * en.tier.scoreMult;
+      spawnParticles(en.x, en.y, en.tier.color);
+      if (en.isBoss){
+        // ボス撃破は確定ドロップ(通常敵の低確率ドロップとは別扱い)
+        items.push(makeItem(en.x, en.y, 1.6, 14, ITEM_TYPES[Math.floor(Math.random()*ITEM_TYPES.length)]));
+      } else {
+        maybeDropItem(en.x, en.y);
+      }
+      updateUI();
+      return false;
+    }
+    return true;
+  });
+
+  // ボス/コンボイを全滅させたら通常のwave進行・雑魚スポーンを再開する
+  if (eventActive && !enemies.some(en=>en.isBoss || en.isConvoyMember)){
+    eventActive = false;
+    addToast('撃破！', '#ffd23f');
+    spawnCooldown = 40;
   }
 
   // bullet-item collision(氷を割るたびにhpが減り、0で氷が割れる。効果の付与は「割れた後に触れた時」)
@@ -493,7 +595,7 @@ function draw(){
       // hard / elite / titan: 装甲風の八角形。ティアごとに色と縁取りが変わる
       ctx.fillStyle = flashing ? '#fff' : (key==='hard' ? '#5a5f73' : en.tier.color);
       ctx.strokeStyle = key==='hard' ? '#ff5f6d' : '#fff';
-      ctx.lineWidth = key==='titan' ? 4 : 3;
+      ctx.lineWidth = key==='boss' ? 6 : key==='titan' ? 4 : 3;
       const s = en.w/2;
       ctx.beginPath();
       ctx.moveTo(-s*0.5,-s); ctx.lineTo(s*0.5,-s);
@@ -646,7 +748,12 @@ if (DEBUG){
       counts: {
         enemies: enemies.length, bullets: bullets.length,
         items: items.length, itemsBroken: items.filter(it=>it.broken).length
-      }
+      },
+      eventActive,
+      boss: (() => {
+        const b = enemies.find(en => en.isBoss);
+        return b ? { hp: b.hp, maxHp: b.maxHp, lane: b.lane } : null;
+      })()
     }),
 
     // headless Chromeでは非アクティブタブのrequestAnimationFrameが極端にスロットリングされる
@@ -684,6 +791,11 @@ if (DEBUG){
     spawnItem: (typeKey = 'rapid', lane = POWERUP_LANES[0], y = -20) => {
       const type = ITEM_TYPES.find(t => t.k === typeKey) || ITEM_TYPES[0];
       items.push(makeItem(laneX(lane), y, 2.0, 15, type));
-    }
+    },
+
+    // form省略時は通常と同じ交互ロジック('single'/'convoy'で強制指定もできる)
+    spawnBossNow: (form) => { startBossEvent(form); },
+    // 次の撃破処理(死亡フィルタ)が拾えるようhpを負にするだけ。即座には消えない
+    killBoss: () => { const b = enemies.find(en => en.isBoss); if (b) b.hp = -1; }
   };
 }
