@@ -27,6 +27,18 @@ const ENEMY_LANES = [0, 2, 4];
 const POWERUP_LANES = [1, 3];
 function laneX(i){ return W() * ( (i+1) / (LANE_COUNT+1) ); }
 
+// レーンギミック: 時間経過でレーンの役割が一時的に入れ替わる('swap')か、
+// 特定のレーンが一時的に封鎖される('blockade')。ENEMY_LANES/POWERUP_LANES自体は
+// canonicalな役割定義として変更せず、実際のスポーンや描画はこの2関数経由で参照する
+function activeEnemyLanes(){
+  const lanes = lanesSwapped ? POWERUP_LANES : ENEMY_LANES;
+  return blockedLane !== null ? lanes.filter(l => l !== blockedLane) : lanes;
+}
+function activePowerupLanes(){
+  const lanes = lanesSwapped ? ENEMY_LANES : POWERUP_LANES;
+  return blockedLane !== null ? lanes.filter(l => l !== blockedLane) : lanes;
+}
+
 // ---- game state ----
 let player, bullets, enemies, particles, items, toasts;
 let score, wave, playerHP, maxHP;
@@ -35,6 +47,19 @@ let touchX = null;
 let itemSpawnTimer = 0;
 let eventActive = false; // ボス/コンボイ中は通常のwave進行・雑魚スポーンを止める
 let eventWave = null;    // 直近にイベントを起こしたwave(同じwaveで再トリガーしない)
+
+// レーンギミック: 予告(gimmickWarning)→発動(gimmickActive)→解除、の3段階タイマー
+const GIMMICK_INTERVAL = 3600; // 約60秒ごとに次の予告が入る
+const GIMMICK_WARNING = 120;   // 約2秒の予告
+const GIMMICK_DURATION = 480;  // 約8秒間持続
+let gimmickTimer = 0;
+let gimmickWarning = 0;
+let gimmickActive = null;       // 'swap' | 'blockade' | null
+let gimmickDuration = 0;
+let pendingGimmickType = null;  // 予告中に決めておく種類
+let pendingBlockedLane = null;  // 予告中に決めておく封鎖対象レーン('blockade'の場合)
+let lanesSwapped = false;
+let blockedLane = null;
 
 // パワーアップは時間制限なしの永続レベルアップ方式。ただし放置していると一定時間ごとに1段階下がる
 // (=取り続けないと火力が目減りする)。shieldだけは「被弾を肩代わりする回数」のストック。
@@ -100,6 +125,14 @@ function initGame(){
   eventWave = null;
   bombCharges = 0;
   itemLockTimer = 0;
+  gimmickTimer = GIMMICK_INTERVAL;
+  gimmickWarning = 0;
+  gimmickActive = null;
+  gimmickDuration = 0;
+  pendingGimmickType = null;
+  pendingBlockedLane = null;
+  lanesSwapped = false;
+  blockedLane = null;
   updateUI();
 }
 
@@ -154,7 +187,7 @@ function makeEnemy(lane, tier){
 }
 
 function spawnEnemyRow(){
-  for (const lane of ENEMY_LANES){
+  for (const lane of activeEnemyLanes()){
     if (Math.random() < 0.85){ // まれに1レーン抜けて緩急をつける
       enemies.push(makeEnemy(lane, pickTier()));
     }
@@ -201,6 +234,9 @@ function spawnConvoy(){
 function startBossEvent(forcedForm){
   eventActive = true;
   eventWave = wave;
+  // ボス戦は常に通常のレーン配置で戦えるようにする。進行中のギミックがあれば打ち切る
+  gimmickWarning = 0;
+  if (gimmickActive) endGimmick();
   enemies.length = 0; // 道中の雑魚を片付けてから登場させる
   const form = forcedForm || ((Math.floor(wave / BOSS_WAVE_INTERVAL) % 2 === 0) ? 'single' : 'convoy');
   if (form === 'single'){
@@ -212,10 +248,28 @@ function startBossEvent(forcedForm){
   }
 }
 
+// レーンギミックの発動/解除。予告(gimmickWarning)経由でも、デバッグAPI(forceGimmick)
+// からの即時適用でも、どちらもこの2関数を通す
+function applyGimmick(type, lane){
+  gimmickActive = type;
+  gimmickDuration = GIMMICK_DURATION;
+  if (type === 'swap'){
+    lanesSwapped = true;
+  } else {
+    blockedLane = (lane !== undefined && lane !== null) ? lane : Math.floor(Math.random()*LANE_COUNT);
+  }
+}
+function endGimmick(){
+  gimmickActive = null;
+  lanesSwapped = false;
+  blockedLane = null;
+}
+
 // パワーアップレーン(1,3)専用。撃破ドロップではなく一定間隔で自動的に降ってくる。
 // これを取り続けないと火力・耐久が追いつかず敵の圧力に押しつぶされる。
 function spawnPowerupFromLane(){
-  const lane = POWERUP_LANES[Math.floor(Math.random()*POWERUP_LANES.length)];
+  const lanes = activePowerupLanes();
+  const lane = lanes[Math.floor(Math.random()*lanes.length)];
   const type = ITEM_TYPES[Math.floor(Math.random()*ITEM_TYPES.length)];
   items.push(makeItem(laneX(lane), -20, 2.0, 15, type));
 }
@@ -368,6 +422,24 @@ function update(dt){
     }
     if (wave % BOSS_WAVE_INTERVAL === 0 && wave !== eventWave){
       startBossEvent();
+    }
+
+    // レーンギミック: 予告→発動→解除の3段階。ボス/コンボイ中は発生させない
+    if (gimmickActive){
+      gimmickDuration -= dt;
+      if (gimmickDuration <= 0) endGimmick();
+    } else if (gimmickWarning > 0){
+      gimmickWarning -= dt;
+      if (gimmickWarning <= 0) applyGimmick(pendingGimmickType, pendingBlockedLane);
+    } else {
+      gimmickTimer -= dt;
+      if (gimmickTimer <= 0){
+        gimmickTimer = GIMMICK_INTERVAL;
+        gimmickWarning = GIMMICK_WARNING;
+        pendingGimmickType = Math.random() < 0.5 ? 'swap' : 'blockade';
+        pendingBlockedLane = pendingGimmickType === 'blockade' ? Math.floor(Math.random()*LANE_COUNT) : null;
+        addToast(pendingGimmickType==='swap' ? 'レーンが入れ替わる…' : '通行止めが発生…', '#ffd23f');
+      }
     }
   }
 
@@ -557,16 +629,35 @@ function draw(){
     ctx.fillRect(sx, sy, 2, 2);
   }
 
-  // レーン背景を役割ごとに色分け(敵レーン=赤み、供給レーン=水色み)して区別を明確化
+  // レーン背景を役割ごとに色分け(敵レーン=赤み、供給レーン=水色み)して区別を明確化。
+  // ギミックのswap中はactiveEnemyLanes/activePowerupLanesが入れ替わるので自動的に反映される
   const laneW = W() / (LANE_COUNT+1) * 0.9;
-  ENEMY_LANES.forEach(i=>{
+  activeEnemyLanes().forEach(i=>{
     ctx.fillStyle = 'rgba(255,95,109,0.05)';
     ctx.fillRect(laneX(i)-laneW/2, 0, laneW, H());
   });
-  POWERUP_LANES.forEach(i=>{
+  activePowerupLanes().forEach(i=>{
     ctx.fillStyle = 'rgba(79,209,255,0.06)';
     ctx.fillRect(laneX(i)-laneW/2, 0, laneW, H());
   });
+
+  // 封鎖レーン(敵もアイテムも通らない)はオレンジ系で塗って区別する
+  if (blockedLane !== null){
+    ctx.fillStyle = 'rgba(255,180,0,0.14)';
+    ctx.fillRect(laneX(blockedLane)-laneW/2, 0, laneW, H());
+  }
+
+  // ギミック予告中: 対象レーン(swapなら全レーン、blockadeなら対象1本)を明滅させる
+  if (gimmickWarning > 0){
+    const flicker = (Math.sin(Date.now()/100) + 1) / 2 * 0.25;
+    ctx.fillStyle = `rgba(255,210,60,${flicker})`;
+    const warnLanes = pendingGimmickType === 'swap'
+      ? [0,1,2,3,4]
+      : [pendingBlockedLane];
+    warnLanes.forEach(i=>{
+      ctx.fillRect(laneX(i)-laneW/2, 0, laneW, H());
+    });
+  }
 
   // 自機の現在レーンをハイライト(同じレーンに敵が来ると危険、という判断材料に)
   ctx.fillStyle = 'rgba(255,255,255,0.05)';
@@ -793,7 +884,15 @@ if (DEBUG){
         return b ? { hp: b.hp, maxHp: b.maxHp, lane: b.lane } : null;
       })(),
       bombCharges,
-      itemLocked: itemLockTimer > 0
+      itemLocked: itemLockTimer > 0,
+      gimmick: {
+        active: gimmickActive,
+        warning: gimmickWarning > 0,
+        lanesSwapped,
+        blockedLane,
+        enemyLanesNow: activeEnemyLanes(),
+        powerupLanesNow: activePowerupLanes()
+      }
     }),
 
     // headless Chromeでは非アクティブタブのrequestAnimationFrameが極端にスロットリングされる
@@ -840,6 +939,11 @@ if (DEBUG){
 
     setBombCharges: (n) => { bombCharges = n; },
     // 発動条件・デメリットを含めて本物の経路を検証するため、実際のuseBomb()をそのまま呼ぶ
-    useBomb: () => { useBomb(); }
+    useBomb: () => { useBomb(); },
+
+    // 次の予告までのタイマーを直接書き換える(自然な予告→発動の流れを検証する用)
+    setGimmickTimer: (n) => { gimmickTimer = n; },
+    // 予告を飛ばして即座に適用する('blockade'でlane省略時はランダム)
+    forceGimmick: (type, lane) => { gimmickWarning = 0; applyGimmick(type, lane); }
   };
 }
