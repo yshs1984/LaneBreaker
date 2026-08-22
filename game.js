@@ -19,12 +19,14 @@ const bombCount = document.getElementById('bombCount');
 
 let W = ()=>canvas.width, H = ()=>canvas.height;
 
-// レーンを5本に分割し、役割を固定する: 敵レーン3本・パワーアップレーン2本を交互配置
-// [敵, 供給, 敵, 供給, 敵] という並びにすることで、自機が左右どちらに寄っても
-// 「敵を避ける/撃つ」と「アイテムを取る」を両方カバーしやすい配置にしている
-const LANE_COUNT = 5;
-const ENEMY_LANES = [0, 2, 4];
-const POWERUP_LANES = [1, 3];
+// レーンを3本に分割し、役割を固定する: [敵, 供給, 敵]。中央の供給レーンを取りに行くには
+// 必ず両サイドの敵レーンを離れる必要があり、「アイテムを取る」と「敵を避ける/撃つ」の
+// 往復にリスクが伴う配置にしている
+const LANE_COUNT = 3;
+const ENEMY_LANES = [0, 2];
+const POWERUP_LANES = [1];
+const ALL_LANES = Array.from({length: LANE_COUNT}, (_, i) => i);
+const CENTER_LANE = Math.floor(LANE_COUNT / 2);
 function laneX(i){ return W() * ( (i+1) / (LANE_COUNT+1) ); }
 
 // レーンギミック: 時間経過でレーンの役割が一時的に入れ替わる('swap')か、
@@ -111,8 +113,8 @@ function pickTier(){
 }
 
 function initGame(){
-  // プレイヤーはレーン単位で移動する(自由な連続移動ではなく、5レーンのどこかに所属する)
-  player = { x: laneX(2), y: H()-90, w: 46, h: 46, lane: 2, targetLane: 2 };
+  // プレイヤーはレーン単位で移動する(自由な連続移動ではなく、いずれかのレーンに所属する)
+  player = { x: laneX(CENTER_LANE), y: H()-90, w: 46, h: 46, lane: CENTER_LANE, targetLane: CENTER_LANE };
   bullets = [];
   enemies = [];
   particles = [];
@@ -170,7 +172,7 @@ function renderBuffRow(){
   ).join('');
 }
 
-// 敵レーン(0,2,4)固定で、一定間隔ごとに1列(最大3体)を継続的にスポーンし続ける方式。
+// 敵レーン(0,2)固定で、一定間隔ごとに1列(最大2体)を継続的にスポーンし続ける方式。
 // 「全滅させたら休憩できる」状態を無くし、常に画面内に敵がいる圧力を作る。
 // ウェーブが進むほど間隔が短く、速度・耐久・硬い敵の比率が上がっていく。
 function spawnInterval(){
@@ -216,7 +218,7 @@ const BOSS_WAVE_INTERVAL = 5;
 function makeBoss(){
   const hp = 220 + wave*15; // たたき台。実プレイで要調整
   return {
-    lane: 2, x: laneX(2), y: -100,
+    lane: CENTER_LANE, x: laneX(CENTER_LANE), y: -100,
     w: 130, h: 100,
     vy: 0.4,
     hp, maxHp: hp,
@@ -277,10 +279,13 @@ function endGimmick(){
   blockedLane = null;
 }
 
-// パワーアップレーン(1,3)専用。撃破ドロップではなく一定間隔で自動的に降ってくる。
+// パワーアップレーン(1)専用。撃破ドロップではなく一定間隔で自動的に降ってくる。
 // これを取り続けないと火力・耐久が追いつかず敵の圧力に押しつぶされる。
 function spawnPowerupFromLane(){
   const lanes = activePowerupLanes();
+  // 供給レーンが1本しかないため、blockadeでそのレーンが封鎖されると空配列になりうる。
+  // その間は供給が完全に止まる(laneX(undefined)によるNaNアイテムの生成を防ぐ)
+  if (lanes.length === 0) return;
   const lane = lanes[Math.floor(Math.random()*lanes.length)];
   const type = ITEM_TYPES[Math.floor(Math.random()*ITEM_TYPES.length)];
   items.push(makeItem(laneX(lane), -20, 2.0, 15, type));
@@ -725,7 +730,7 @@ function draw(){
     const flicker = (Math.sin(Date.now()/100) + 1) / 2 * 0.25;
     ctx.fillStyle = `rgba(255,210,60,${flicker})`;
     const warnLanes = pendingGimmickType === 'swap'
-      ? [0,1,2,3,4]
+      ? ALL_LANES
       : [pendingBlockedLane];
     warnLanes.forEach(i=>{
       ctx.fillRect(laneX(i)-laneW/2, 0, laneW, H());
