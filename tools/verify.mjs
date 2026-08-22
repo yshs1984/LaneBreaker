@@ -218,11 +218,13 @@ const scenarios = {
   // 即死・ボスは大ダメージ(即死しない)・弾は残る、使用後は一定時間アイテムが取得できないこと
   bomb: async (check) => {
     await withGame({ name: 'bomb', check }, async (game) => {
-      // 他タイマーの自然発火に横から邪魔されないよう止めておく
+      // 他タイマーの自然発火に横から邪魔されないよう止めておく(新規の雑魚湧き・自動連射が
+      // 演出後のクリーンアップ確認に紛れ込むと、稀に余計なパーティクルが残ってflakyになる)
       await game.call('setFireTimer', 999999);
       await game.call('setItemSpawnTimer', 999999);
+      await game.call('setSpawnCooldown', 999999);
 
-      // --- チャージ0: 発動しない ---
+      // --- チャージ0: 発動しない(演出も出ない) ---
       await game.call('setBombCharges', 0);
       await game.call('spawnEnemy', 'normal', 0);
       await game.call('spawnEnemy', 'normal', 2);
@@ -230,8 +232,11 @@ const scenarios = {
       let s = await game.snap();
       check.equal(s.counts.enemies, 2, 'チャージ0: 発動せず敵はそのまま');
       check.equal(s.bombCharges, 0, 'チャージ0: 消費されない');
+      check.equal(s.fx.explosions, 0, 'チャージ0: 爆発演出も出ない');
+      check.equal(s.fx.bombFlash, 0, 'チャージ0: 画面フラッシュも出ない');
+      check.equal(s.fx.shake, 0, 'チャージ0: 画面シェイクも出ない');
 
-      // --- 雑魚・コンボイの即死、弾は残る、コンボイ全滅でイベントも終わる ---
+      // --- 雑魚・コンボイの即死、弾は残る、コンボイ全滅でイベントも終わる、爆発演出が出る ---
       await game.call('clearEnemies');
       await game.call('setBombCharges', 1);
       await game.call('spawnBossNow', 'convoy'); // 敵専用レーン3体
@@ -239,6 +244,16 @@ const scenarios = {
       await game.call('forceFire');
       const beforeWipe = await game.snap();
       await game.call('useBomb');
+      s = await game.snap();
+      check(
+        s.fx.explosions >= 1 + beforeWipe.counts.enemies,
+        'ボム直後: メイン+敵の数だけ爆発リングが出る'
+      );
+      check(s.fx.bombFlash > 0, 'ボム直後: 画面フラッシュが発生する');
+      check(s.fx.shake > 0, 'ボム直後: 画面シェイクが発生する');
+      check(s.fx.particles > beforeWipe.fx.particles, 'ボム直後: パーティクルが増える');
+      await game.shot('bomb-blast');
+
       await game.tick(1, 1);
       s = await game.snap();
       check.equal(s.counts.enemies, 0, 'ボム: 雑魚・コンボイが全滅する');
@@ -247,17 +262,59 @@ const scenarios = {
       check.equal(s.bombCharges, 0, 'ボム: チャージが消費される');
       check.equal(s.counts.bullets, beforeWipe.counts.bullets, 'ボム: 弾は消えずに残る');
 
+      // コンボイ全滅でspawnCooldownが再始動する(通常のイベント終了処理)ので、
+      // クリーンアップ確認の直前で改めて止め直す
+      await game.call('setSpawnCooldown', 999999);
+
+      // --- 演出は時間経過で必ず片付く(リークしない) ---
+      await game.tick(60, 1);
+      s = await game.snap();
+      check.equal(s.fx.explosions, 0, '演出後: 爆発リングが消える');
+      check.equal(s.fx.bombFlash, 0, '演出後: 画面フラッシュが消える(負値で止まらず0になる)');
+      check.equal(s.fx.shake, 0, '演出後: 画面シェイクが収まる(負値で止まらず0になる)');
+      check.equal(s.fx.particles, 0, '演出後: パーティクルも消える');
+
       // --- ボスは即死せず大ダメージ ---
       await game.call('clearEnemies');
       await game.call('spawnBossNow', 'single');
       await game.call('setBombCharges', 1);
       const bossBefore = (await game.snap()).boss;
       await game.call('useBomb');
+      s = await game.snap();
+      check(s.fx.explosions >= 2, 'ボス戦ボム: メイン+ボスの分の爆発リングが出る');
       await game.tick(1, 1);
       s = await game.snap();
       check(s.boss !== null, 'ボム: ボスは即死せず残る');
       check(s.boss.hp < bossBefore.hp, 'ボム: ボスはダメージを受ける');
       check(s.boss.hp > s.boss.maxHp * 0.5, 'ボム: ボスは一撃では倒れない');
+
+      // 直前のボム演出を完全に片付けてから次のケースに入る(演出の残数が混ざらないように)
+      await game.tick(40, 1);
+
+      // --- 敵が多数いても演出が上限を超えない ---
+      // 爆発リングの上限(BOMB_BLAST_CAP)だけでなく、パーティクルの総数上限(PARTICLE_CAP)も
+      // 実際に試すため、撃破時の通常パーティクル(1体8個)だけで上限に迫る数を用意する
+      await game.call('clearEnemies');
+      await game.call('clearItems');
+      const manyEnemyCount = 40;
+      for (let i = 0; i < manyEnemyCount; i++){
+        await game.call('spawnEnemy', 'normal', i % 5);
+      }
+      await game.call('setBombCharges', 1);
+      const capInfo = await game.snap();
+      await game.call('useBomb');
+      await game.tick(3, 1); // 点火の遅延分を少し進める
+      s = await game.snap();
+      check.equal(
+        s.fx.explosions, 1 + capInfo.fx.blastCap,
+        `大量の敵: 爆発リングは上限(メイン+${capInfo.fx.blastCap})でちょうど頭打ちになる`
+      );
+      // 40体撃破分(1体8個=320個相当)が上限を上回るリクエストになるため、
+      // 上限にちょうど頭打ちになることを検証できる(上限を試さないまま通ってしまう表明にしない)
+      check.equal(
+        s.fx.particles, capInfo.fx.particleCap,
+        `大量の敵: パーティクルは上限(${capInfo.fx.particleCap})でちょうど頭打ちになる`
+      );
 
       // --- デメリット: 使用後は一定時間アイテムが取得できない ---
       await game.call('clearEnemies');
