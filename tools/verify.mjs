@@ -395,7 +395,11 @@ const scenarios = {
 
       // --- blockadeが「唯一の供給レーン(1)」を封鎖しても、NaN座標のゴーストアイテムが
       //     生成されない(3レーン化で新たに発生しうる破綻ケース) ---
+      // 雑魚の撃破ドロップ(低確率)が紛れ込んで counts.items===0 が偶然にならないよう、
+      // 敵を片付けて新規スポーンも止めておく
+      await game.call('clearEnemies');
       await game.call('clearItems');
+      await game.call('setSpawnCooldown', 999999);
       await game.call('forceGimmick', 'blockade', 1);
       s = await game.snap();
       check.equal(s.gimmick.powerupLanesNow.length, 0, 'blockade(供給レーン): 供給レーンが0本になる');
