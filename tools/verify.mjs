@@ -288,6 +288,65 @@ const scenarios = {
     });
   },
 
+  // レーンギミック(issue #14)。swap/blockadeそれぞれの発動・自然解除、
+  // ボス中は発生しないこと、進行中のギミックがボス開始で打ち切られることを表明
+  gimmick: async (check) => {
+    await withGame({ name: 'gimmick', check }, async (game) => {
+      // --- swap: 役割が入れ替わる ---
+      await game.call('forceGimmick', 'swap');
+      let s = await game.snap();
+      check.equal(s.gimmick.active, 'swap', 'swap: 発動中になる');
+      check.equal(s.gimmick.lanesSwapped, true, 'swap: lanesSwappedが立つ');
+      check.equal(
+        JSON.stringify(s.gimmick.enemyLanesNow), JSON.stringify([1, 3]),
+        'swap: 敵レーンが元の供給レーン(1,3)になる'
+      );
+      check.equal(
+        JSON.stringify(s.gimmick.powerupLanesNow), JSON.stringify([0, 2, 4]),
+        'swap: 供給レーンが元の敵レーン(0,2,4)になる'
+      );
+
+      // 持続時間(約8秒)を超えると自然に解除される
+      await game.tick(500, 1);
+      s = await game.snap();
+      check.equal(s.gimmick.active, null, 'swap: 時間経過で解除される');
+      check.equal(s.gimmick.lanesSwapped, false, 'swap: lanesSwappedも戻る');
+
+      // --- blockade: 指定レーンが封鎖される ---
+      await game.call('forceGimmick', 'blockade', 1);
+      s = await game.snap();
+      check.equal(s.gimmick.active, 'blockade', 'blockade: 発動中になる');
+      check.equal(s.gimmick.blockedLane, 1, 'blockade: 対象レーンが記録される');
+      check(!s.gimmick.enemyLanesNow.includes(1), 'blockade: 敵レーンに封鎖レーンが含まれない');
+      check(!s.gimmick.powerupLanesNow.includes(1), 'blockade: 供給レーンにも封鎖レーンが含まれない');
+      await game.shot('blockade-active');
+
+      await game.tick(500, 1);
+      s = await game.snap();
+      check.equal(s.gimmick.active, null, 'blockade: 時間経過で解除される');
+      check.equal(s.gimmick.blockedLane, null, 'blockade: blockedLaneも戻る');
+
+      // --- ボス中は新規ギミックが発生しない ---
+      await game.call('spawnBossNow', 'single');
+      await game.call('setGimmickTimer', 0);
+      await game.tick(10, 1);
+      s = await game.snap();
+      check.equal(s.gimmick.active, null, 'ボス中: ギミックが発生しない');
+      check.equal(s.gimmick.warning, false, 'ボス中: 予告も出ない');
+
+      // --- 進行中のギミックはボス開始で打ち切られる ---
+      await game.call('killBoss');
+      await game.tick(1, 1);
+      await game.call('forceGimmick', 'swap');
+      s = await game.snap();
+      check.equal(s.gimmick.lanesSwapped, true, '打ち切りテスト: 一旦swapが有効になる');
+      await game.call('spawnBossNow', 'single');
+      s = await game.snap();
+      check.equal(s.gimmick.active, null, 'ボス開始: 進行中のギミックが打ち切られる');
+      check.equal(s.gimmick.lanesSwapped, false, 'ボス開始: レーン配置も元に戻る');
+    });
+  },
+
   // ゲームオーバーのランク表示(issue #5)。到達ウェーブに応じたランクが
   // 正しく表示されること
   gameover: async (check) => {
