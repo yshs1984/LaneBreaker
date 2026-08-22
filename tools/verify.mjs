@@ -60,7 +60,16 @@ const scenarios = {
   lanes: async (check) => {
     await withGame({ name: 'lanes', check }, async (game) => {
       let s = await game.snap();
-      check.equal(s.playerLane, 2, '開始レーンは中央(2)');
+      check.equal(s.playerLane, 1, '開始レーンは中央(1)');
+      // レーン構成(issue #18で3レーン化): [敵,供給,敵]
+      check.equal(
+        JSON.stringify(s.gimmick.enemyLanesNow), JSON.stringify([0, 2]),
+        '敵専用レーンは0,2'
+      );
+      check.equal(
+        JSON.stringify(s.gimmick.powerupLanesNow), JSON.stringify([1]),
+        '供給専用レーンは1のみ'
+      );
 
       for (let i = 0; i < 5; i++) {
         await game.page.keyboard.press('ArrowLeft');
@@ -74,7 +83,7 @@ const scenarios = {
         await game.tick(1, 1);
       }
       s = await game.snap();
-      check.equal(s.playerLane, 4, '右端(4)を超えない');
+      check.equal(s.playerLane, 2, '右端(2)を超えない');
     });
   },
 
@@ -86,8 +95,8 @@ const scenarios = {
       const before = await game.snap();
       check.equal(before.playerHP, before.maxHP, '開始時はフルHP');
 
-      // 自機と別レーン(4)に、下端到達済みの位置で敵を出す
-      await game.call('spawnEnemy', 'normal', 4, 9999);
+      // 自機と別レーン(2)に、下端到達済みの位置で敵を出す
+      await game.call('spawnEnemy', 'normal', 2, 9999);
       await game.tick(1, 1);
       const after = await game.snap();
       check(after.playerHP < before.playerHP, '別レーンの敵でも下端到達で被弾する');
@@ -96,7 +105,7 @@ const scenarios = {
       // 無敵化中はダメージを受けない
       await game.call('setInvincible', true);
       const beforeInv = await game.snap();
-      await game.call('spawnEnemy', 'normal', 4, 9999);
+      await game.call('spawnEnemy', 'normal', 2, 9999);
       await game.tick(1, 1);
       const afterInv = await game.snap();
       check.equal(afterInv.playerHP, beforeInv.playerHP, '無敵化中はダメージを受けない');
@@ -204,7 +213,7 @@ const scenarios = {
       await game.call('spawnBossNow', 'convoy');
       s = await game.snap();
       check.equal(s.eventActive, true, 'コンボイ: イベント中になる');
-      check.equal(s.counts.enemies, 3, 'コンボイ: 敵専用レーンの数だけ出現する');
+      check.equal(s.counts.enemies, 2, 'コンボイ: 敵専用レーンの数だけ出現する');
       await game.shot('convoy-spawned');
 
       await game.call('clearEnemies'); // 配列操作だけで全滅させても、残存チェックで正しく終了すること
@@ -298,7 +307,7 @@ const scenarios = {
       await game.call('clearItems');
       const manyEnemyCount = 40;
       for (let i = 0; i < manyEnemyCount; i++){
-        await game.call('spawnEnemy', 'normal', i % 5);
+        await game.call('spawnEnemy', 'normal', i % 3);
       }
       await game.call('setBombCharges', 1);
       const capInfo = await game.snap();
@@ -355,12 +364,12 @@ const scenarios = {
       check.equal(s.gimmick.active, 'swap', 'swap: 発動中になる');
       check.equal(s.gimmick.lanesSwapped, true, 'swap: lanesSwappedが立つ');
       check.equal(
-        JSON.stringify(s.gimmick.enemyLanesNow), JSON.stringify([1, 3]),
-        'swap: 敵レーンが元の供給レーン(1,3)になる'
+        JSON.stringify(s.gimmick.enemyLanesNow), JSON.stringify([1]),
+        'swap: 敵レーンが元の供給レーン(1)になる'
       );
       check.equal(
-        JSON.stringify(s.gimmick.powerupLanesNow), JSON.stringify([0, 2, 4]),
-        'swap: 供給レーンが元の敵レーン(0,2,4)になる'
+        JSON.stringify(s.gimmick.powerupLanesNow), JSON.stringify([0, 2]),
+        'swap: 供給レーンが元の敵レーン(0,2)になる'
       );
 
       // 持続時間(約8秒)を超えると自然に解除される
@@ -369,19 +378,39 @@ const scenarios = {
       check.equal(s.gimmick.active, null, 'swap: 時間経過で解除される');
       check.equal(s.gimmick.lanesSwapped, false, 'swap: lanesSwappedも戻る');
 
-      // --- blockade: 指定レーンが封鎖される ---
-      await game.call('forceGimmick', 'blockade', 1);
+      // --- blockade: 指定レーンが封鎖される(敵レーン0を対象に、対象レーンだけが
+      //     両ロールから外れることを見る) ---
+      await game.call('forceGimmick', 'blockade', 0);
       s = await game.snap();
       check.equal(s.gimmick.active, 'blockade', 'blockade: 発動中になる');
-      check.equal(s.gimmick.blockedLane, 1, 'blockade: 対象レーンが記録される');
-      check(!s.gimmick.enemyLanesNow.includes(1), 'blockade: 敵レーンに封鎖レーンが含まれない');
-      check(!s.gimmick.powerupLanesNow.includes(1), 'blockade: 供給レーンにも封鎖レーンが含まれない');
+      check.equal(s.gimmick.blockedLane, 0, 'blockade: 対象レーンが記録される');
+      check(!s.gimmick.enemyLanesNow.includes(0), 'blockade: 敵レーンに封鎖レーンが含まれない');
+      check(!s.gimmick.powerupLanesNow.includes(0), 'blockade: 供給レーンにも封鎖レーンが含まれない');
       await game.shot('blockade-active');
 
       await game.tick(500, 1);
       s = await game.snap();
       check.equal(s.gimmick.active, null, 'blockade: 時間経過で解除される');
       check.equal(s.gimmick.blockedLane, null, 'blockade: blockedLaneも戻る');
+
+      // --- blockadeが「唯一の供給レーン(1)」を封鎖しても、NaN座標のゴーストアイテムが
+      //     生成されない(3レーン化で新たに発生しうる破綻ケース) ---
+      // 雑魚の撃破ドロップ(低確率)が紛れ込んで counts.items===0 が偶然にならないよう、
+      // 敵を片付けて新規スポーンも止めておく
+      await game.call('clearEnemies');
+      await game.call('clearItems');
+      await game.call('setSpawnCooldown', 999999);
+      await game.call('forceGimmick', 'blockade', 1);
+      s = await game.snap();
+      check.equal(s.gimmick.powerupLanesNow.length, 0, 'blockade(供給レーン): 供給レーンが0本になる');
+      await game.call('setItemSpawnTimer', 0);
+      await game.tick(60, 1);
+      s = await game.snap();
+      check.equal(s.counts.items, 0, 'blockade(供給レーン): 封鎖中はアイテムが生成されない(NaN座標のゴーストが残らない)');
+
+      await game.tick(500, 1);
+      s = await game.snap();
+      check.equal(s.gimmick.active, null, 'blockade(供給レーン): 時間経過で解除される');
 
       // --- ボス中は新規ギミックが発生しない ---
       await game.call('spawnBossNow', 'single');
