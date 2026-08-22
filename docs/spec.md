@@ -206,7 +206,7 @@ node tools/verify.mjs --list      # シナリオ一覧
 - `tick(steps, dt)` — `update(dt); draw();`を直接回す。headless Chromeでは非アクティブタブの`requestAnimationFrame`が極端にスロットリングされるため、時間を進めるときは必ずこれを使う
 - `start()` / `setInvincible(v)` / `setWave(n)` / `setPlayerLane(n)` / `setLevel(key, n)` / `setShield(n)` / `killPlayer()` / `clearEnemies()` / `clearItems()` / `clearBullets()` / `forceFire()`
 - `spawnEnemy(tierKey, lane, y)` / `spawnItem(typeKey, lane, y)` — `makeEnemy`/`makeItem`を通して実際のスポーンと同じ形のオブジェクトを生成する。`y`を指定できるのは検証の都合(発射位置付近や下端付近に即座に置いて1ヒットずつ検証するため)
-- `setFireTimer(n)` / `setItemSpawnTimer(n)` — 自動連射・アイテム自動供給のタイマーを直接書き換える。大きな値を入れて実質止め、`forceFire()`や意図的に出したアイテムだけで挙動を制御したいときに使う(氷アイテムの検証で、新規アイテムの自然発生に横から邪魔されないようにする、など)
+- `setFireTimer(n)` / `setItemSpawnTimer(n)` / `setSpawnCooldown(n)` — 自動連射・アイテム自動供給・雑魚の自然スポーンのタイマーを直接書き換える。大きな値を入れて実質止め、`forceFire()`や意図的に出した敵/アイテムだけで挙動を制御したいときに使う(氷アイテムやボム演出の検証で、新規アイテム/敵の自然発生に横から邪魔されないようにする、など)
 - `spawnBossNow(form)` — `startBossEvent(form)`を呼ぶ(`form`省略時は通常と同じ`wave`ベースの交互ロジック、`'single'`/`'convoy'`で強制指定もできる)
 - `killBoss()` — `enemies`内の`isBoss`な敵の`hp`を`-1`にする(次のフレームの撃破処理フィルタが拾う)
 - `setBombCharges(n)` / `useBomb()` — ボムのチャージを直接設定する / 実際の`useBomb()`をそのまま呼ぶ(発動条件・デメリットを含めて本物の経路を検証する)

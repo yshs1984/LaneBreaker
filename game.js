@@ -668,9 +668,9 @@ function update(dt){
   });
   explosions = explosions.filter(e => e.delay > 0 || e.life > 0);
 
-  if (bombFlash > 0) bombFlash -= dt;
+  if (bombFlash > 0) bombFlash = Math.max(0, bombFlash - dt);
   if (shakeTime > 0){
-    shakeTime -= dt;
+    shakeTime = Math.max(0, shakeTime - dt);
     if (shakeTime <= 0) shakeMag = 0;
   }
 
@@ -997,7 +997,9 @@ if (DEBUG){
         explosions: explosions.length,
         particles: particles.length,
         bombFlash,
-        shake: shakeTime
+        shake: shakeTime,
+        blastCap: BOMB_BLAST_CAP,
+        particleCap: PARTICLE_CAP
       }
     }),
 
@@ -1018,6 +1020,9 @@ if (DEBUG){
     // 同様にアイテム自動供給のタイマーも止められるようにする(氷アイテムの検証で
     // 新規アイテムの自然発生に横から邪魔されないようにするため)
     setItemSpawnTimer: (n) => { itemSpawnTimer = n; },
+    // 同様に雑魚の自然スポーンも止められるようにする(ボム演出の検証で、新規に湧いた敵の
+    // 被弾/撃破パーティクルが横から混ざらないようにするため)
+    setSpawnCooldown: (n) => { spawnCooldown = n; },
     killPlayer: () => { playerHP = 0; },
     clearEnemies: () => { enemies.length = 0; },
     clearItems: () => { items.length = 0; },
