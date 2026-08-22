@@ -77,6 +77,14 @@ const BOMB_ITEM_LOCK = 480; // 約8秒
 let bombCharges = 0;
 let itemLockTimer = 0;
 
+// ボムの爆発演出: 中心+各敵位置のリング(explosions)、画面フラッシュ、画面シェイク。
+// ボム自体の効果(hp操作・アイテムロック)には関与しない、純粋な見た目
+const BOMB_BLAST_CAP = 8;   // サブ爆発(敵ごと)の上限体数。画面が埋まりすぎないように
+const PARTICLE_CAP = 260;   // particles配列の総数上限。コンボイ+ボムの同時発生でも重くならないように
+let explosions;
+let bombFlash = 0;
+let shakeTime = 0, shakeTimeMax = 1, shakeMag = 0;
+
 // 敵のティア定義。ウェーブが進むほど強いティアが解禁され、出現比率も上がっていく。
 // hunter: trueの敵は一定間隔で自機のいるレーンへ狙いを変えてくる(その場に留まり続ける戦法を崩す)
 const ENEMY_TIERS = [
@@ -110,6 +118,10 @@ function initGame(){
   particles = [];
   items = [];
   toasts = [];
+  explosions = [];
+  bombFlash = 0;
+  shakeTime = 0;
+  shakeMag = 0;
   score = 0;
   wave = 1;
   maxHP = 100;
@@ -329,13 +341,34 @@ function fireBullet(){
   }
 }
 
-function spawnParticles(x,y,color){
-  for(let i=0;i<8;i++){
+// opts省略時は従来通り(8個・寿命20・速度4・4px)。colorsを渡すと1個ごとにランダムな色になる。
+// particles全体の上限(PARTICLE_CAP)は超えて生成しない(ボム+コンボイ同時発生などで重くならないように)
+function spawnParticles(x, y, color, opts){
+  const count = opts?.count ?? 8;
+  const life = opts?.life ?? 20;
+  const speed = opts?.speed ?? 4;
+  const size = opts?.size ?? 4;
+  const colors = opts?.colors;
+  for(let i=0;i<count;i++){
+    if (particles.length >= PARTICLE_CAP) break;
     particles.push({
-      x, y, vx:(Math.random()-.5)*4, vy:(Math.random()-.5)*4,
-      life:20, color
+      x, y, vx:(Math.random()-.5)*speed, vy:(Math.random()-.5)*speed,
+      life, maxLife: life, size,
+      color: colors ? colors[Math.floor(Math.random()*colors.length)] : color
     });
   }
+}
+
+// 爆発リング1つ。delayフレーム後に点火し、点火のタイミングでパーティクルも一緒に出す
+// (生成タイミングを分散させることで、多数の敵が同時に消えるボム発動時の負荷ピークを下げる)
+function spawnExplosion(x, y, maxR, life, color, delay){
+  explosions.push({ x, y, maxR, life, maxLife: life, color, delay: delay || 0, burst: false });
+}
+
+function addShake(mag, dur){
+  shakeMag = Math.max(shakeMag, mag);
+  shakeTime = dur;
+  shakeTimeMax = dur;
 }
 
 // iceHp: 氷を割って入手するのに必要な被弾数。永続レベル系は軽く、ストック系は重めにしている
@@ -396,11 +429,23 @@ function useBomb(){
   if (!running || bombCharges <= 0) return;
   bombCharges -= 1;
   itemLockTimer = BOMB_ITEM_LOCK; // デメリット: しばらくアイテムが取得できなくなる
-  enemies.forEach(en=>{
+  enemies.forEach((en, i)=>{
     en.hp = en.isBoss ? en.hp - en.maxHp*0.4 : -1; // ボスは大ダメージ、それ以外は即死
     en.hitFlash = 12;
+    // 敵ごとのサブ爆発(先頭BOMB_BLAST_CAP体まで)。delayをずらして連鎖しているように見せる
+    if (i < BOMB_BLAST_CAP){
+      const r = en.isBoss ? en.w*1.3 : Math.max(70, en.w*1.8);
+      spawnExplosion(en.x, en.y, r, 18, en.tier.color, 4 + i*3);
+    }
   });
-  spawnParticles(player.x, player.y-60, '#ffe14d');
+  // メイン爆発: 自機の少し上で1発、他より大きく長く
+  spawnExplosion(player.x, player.y-60, Math.min(280, Math.min(W(),H())*0.45), 26, '#ffe14d', 0);
+  spawnParticles(player.x, player.y-60, '#ffe14d', {
+    count: 18, life: 28, speed: 10, size: 5,
+    colors: ['#fff', '#ffe14d', '#ff9f4f']
+  });
+  bombFlash = 14;
+  addShake(9, 16);
   addToast('ボム発動！', '#ffe14d');
   updateUI();
 }
@@ -609,6 +654,26 @@ function update(dt){
   particles.forEach(p=>{ p.x+=p.vx; p.y+=p.vy; p.life--; });
   particles = particles.filter(p=>p.life>0);
 
+  // ボムの爆発リング: delay中は点火待ち、0を切ったら点火して1回だけパーティクルを追加する
+  explosions.forEach(e=>{
+    if (e.delay > 0){
+      e.delay -= dt;
+      if (e.delay <= 0 && !e.burst){
+        e.burst = true;
+        spawnParticles(e.x, e.y, e.color, { count: 6, life: 16, speed: 6, size: 4 });
+      }
+      return;
+    }
+    e.life -= dt;
+  });
+  explosions = explosions.filter(e => e.delay > 0 || e.life > 0);
+
+  if (bombFlash > 0) bombFlash -= dt;
+  if (shakeTime > 0){
+    shakeTime -= dt;
+    if (shakeTime <= 0) shakeMag = 0;
+  }
+
   toasts.forEach(t=>{ t.life -= dt; });
   toasts = toasts.filter(t=>t.life>0);
 
@@ -620,6 +685,14 @@ function update(dt){
 // ---- draw ----
 function draw(){
   ctx.clearRect(0,0,W(),H());
+
+  // 画面シェイク(ボム発動時など)。UIテキスト(トースト・バージョン表示)は揺らさないよう、
+  // 対応するrestore()はparticles描画の直後に置く
+  ctx.save();
+  if (shakeTime > 0){
+    const power = shakeMag * (shakeTime/shakeTimeMax);
+    ctx.translate((Math.random()-0.5)*2*power, (Math.random()-0.5)*2*power);
+  }
 
   // stars bg
   ctx.fillStyle = 'rgba(255,255,255,0.5)';
@@ -787,13 +860,40 @@ function draw(){
     ctx.restore();
   });
 
-  // particles
-  particles.forEach(p=>{
-    ctx.globalAlpha = p.life/20;
-    ctx.fillStyle = p.color;
-    ctx.fillRect(p.x-2,p.y-2,4,4);
+  // ボムの爆発リング(点火待ち=delay>0のものはまだ描かない)。イーズアウトで広がりながら薄くなる
+  explosions.forEach(e=>{
+    if (e.delay > 0) return;
+    const t = 1 - e.life/e.maxLife;
+    const r = e.maxR * (1 - (1-t)*(1-t));
+    ctx.globalAlpha = (1-t) * 0.22;
+    ctx.fillStyle = e.color;
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = 1-t;
+    ctx.strokeStyle = e.color;
+    ctx.lineWidth = 1 + 5*(1-t);
+    ctx.beginPath();
+    ctx.arc(e.x, e.y, r, 0, Math.PI*2);
+    ctx.stroke();
     ctx.globalAlpha = 1;
   });
+
+  // particles
+  particles.forEach(p=>{
+    ctx.globalAlpha = p.life/p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.fillRect(p.x-p.size/2, p.y-p.size/2, p.size, p.size);
+    ctx.globalAlpha = 1;
+  });
+
+  ctx.restore(); // 画面シェイクの適用終了(以降はUIテキストなので揺れない)
+
+  // ボム発動時の画面フラッシュ(シェイクの影響を受けないよう restore() の後に描く)
+  if (bombFlash > 0){
+    ctx.fillStyle = `rgba(255,240,180,${0.45 * bombFlash/14})`;
+    ctx.fillRect(0, 0, W(), H());
+  }
 
   // toasts(レベルダウン通知など)
   toasts.forEach(t=>{
@@ -892,6 +992,12 @@ if (DEBUG){
         blockedLane,
         enemyLanesNow: activeEnemyLanes(),
         powerupLanesNow: activePowerupLanes()
+      },
+      fx: {
+        explosions: explosions.length,
+        particles: particles.length,
+        bombFlash,
+        shake: shakeTime
       }
     }),
 
