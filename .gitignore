@@ -1,2 +1,5 @@
 # tools/verify.mjs が出力する検証用スクリーンショット
 .verify-shots/
+
+# Claude Codeのサブエージェント用worktreeなど、ローカル作業用ファイル
+.claude/
